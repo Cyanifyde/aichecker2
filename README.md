@@ -7,6 +7,26 @@ ai/   # AI-generated or AI-traced images
 real/ # Real/non-AI images
 ```
 
+## Setup
+
+Install Python deps:
+
+### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+### macOS/Linux
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
 ## Normalize into the training format
 
 Run the dataset preparation script to letterbox every image to 512x512, deduplicate
@@ -16,7 +36,8 @@ by the normalized PNG bytes, and write a manifest for training.
 python -m data.prepare_dataset \
   --ai-dir ai \
   --real-dir real \
-  --output-dir data/processed
+  --output-dir data/processed \
+  --workers 0
 ```
 
 This creates:
@@ -45,7 +66,27 @@ records = load_records_from_manifest(Path("data/processed/manifest.csv"))
 dataset = ImageFolderDataset(records, training=True)
 ```
 
+## Start training
+
+Training scripts live under `train/` and are meant to be run from the command line.
+
+```bash
+python -m train.train_classifier --epochs 3
+```
+
+## Run the Web UI (inference)
+
+Start the FastAPI server:
+
+```bash
+python -m uvicorn webui.backend.app:app --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000/` in your browser.
+
 ## Notes
 
 - The normalized PNGs are the only images used for training; keep originals in `ai/` and `real/`.
 - Duplicates are detected across both classes and only the first occurrence is kept.
+- Use `--workers N` and `--log-level INFO` to speed up and monitor large dataset runs.
+- `--no-png-optimize` is faster, but changes output filenames (hashes) and increases file size.
