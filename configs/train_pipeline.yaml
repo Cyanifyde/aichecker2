@@ -1,4 +1,7 @@
 train_pipeline:
+  logging:
+    level: INFO
+    log_every: 50
   vq_train:
     enabled: true
     data_dir: data/processed

@@ -22,14 +22,14 @@ class VectorQuantizer(nn.Module):
         self.embeddings.weight.data.uniform_(-1 / num_embeddings, 1 / num_embeddings)
 
     def forward(self, z: torch.Tensor) -> VQOutput:
-        flat = z.view(-1, self.embedding_dim)
+        flat = z.reshape(-1, self.embedding_dim)
         dist = (
             flat.pow(2).sum(1, keepdim=True)
             - 2 * flat @ self.embeddings.weight.t()
             + self.embeddings.weight.pow(2).sum(1)
         )
         indices = dist.argmin(1)
-        quantized = self.embeddings(indices).view_as(z)
+        quantized = self.embeddings(indices).reshape_as(z)
         loss = ((quantized.detach() - z) ** 2).mean() + self.beta * ((quantized - z.detach()) ** 2).mean()
         quantized = z + (quantized - z).detach()
         return VQOutput(quantized=quantized, indices=indices.view(z.shape[0], -1), loss=loss)
