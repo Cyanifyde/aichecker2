@@ -1,0 +1,21 @@
+train_pipeline:
+  vq_train:
+    enabled: true
+    data_dir: data/processed
+    epochs: 5
+  kmeans:
+    enabled: true
+    embeddings: artifacts/descriptor_embeddings.npy
+    out: artifacts/codebook.npy
+    clusters: 2048
+  classifier:
+    enabled: true
+    epochs: 3
+  evaluate:
+    enabled: true
+    scores: artifacts/val_scores.npy
+  tune_thresholds:
+    enabled: true
+    non_ai_scores: artifacts/non_ai_scores.npy
+    target_fpr: 0.001
+    ci: 0.95

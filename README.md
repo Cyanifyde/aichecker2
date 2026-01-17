@@ -74,12 +74,28 @@ Training scripts live under `train/` and are meant to be run from the command li
 python -m train.train_classifier --epochs 3
 ```
 
+### End-to-end training pipeline
+
+Use the pipeline runner to execute all training stages from a single YAML config:
+
+```bash
+python -m train.pipeline --config configs/train_pipeline.yaml
+```
+
+Update `configs/train_pipeline.yaml` with your artifact paths (embeddings, scores, etc.).
+
 ## Run the Web UI (inference)
 
 Start the FastAPI server:
 
 ```bash
 python -m uvicorn webui.backend.app:app --host 127.0.0.1 --port 8000
+```
+
+Or use the config-driven launcher:
+
+```bash
+python run_webui.py --config configs/webui.yaml
 ```
 
 Then open `http://127.0.0.1:8000/` in your browser.

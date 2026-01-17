@@ -1,0 +1,26 @@
+webui:
+  bind_host: 127.0.0.1
+  port: 8000
+  cache_policy:
+    mode: unbounded
+    max_items: 10000
+    ttl_days: 30
+  max_upload_size: 10485760
+thresholds:
+  target_fpr: 0.001
+  fpr_ci_confidence: 0.95
+  tau_ai: 0.90
+  tau_ood: 0.60
+  tau_unknown: 0.55
+inference:
+  mode: robust
+  robust_T: 7
+  fast_T: 3
+  N_min: 128
+  N_max: 512
+explainability:
+  importance_cutoff_default: 0.15
+  overlay_sigma_scale: 1.0
+model:
+  embedding_dim: 128
+  codebook_size: 2048

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import yaml
@@ -13,7 +14,7 @@ from webui.backend.models_store import ModelConfig, ModelStore
 from webui.backend.schemas import FeedbackRequest, InferenceResponse
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-CONFIG_PATH = Path("configs/default.yaml")
+CONFIG_PATH = Path(os.environ.get("AICHECKER_CONFIG", "configs/default.yaml"))
 
 
 def load_config() -> dict:
