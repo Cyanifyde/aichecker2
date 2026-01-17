@@ -1,6 +1,7 @@
+import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, List, Tuple
 
 import numpy as np
 from PIL import Image
@@ -32,3 +33,15 @@ class ImageFolderDataset(Dataset):
             img = random_augment(img)
         arr = np.asarray(img).astype(np.float32) / 255.0
         return arr, record.label
+
+
+def load_records_from_manifest(manifest_path: Path) -> List[ImageRecord]:
+    records: List[ImageRecord] = []
+    with manifest_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        base = manifest_path.parent
+        for row in reader:
+            path = base / row["path"]
+            label = int(row["label"])
+            records.append(ImageRecord(path=path, label=label))
+    return records
