@@ -1,0 +1,259 @@
+TITLE: Pixel-only AI-Image Detector with Content-Adaptive Discrete Tokens (Keypoints + Saliency + Slot Attention), Transformer+Graph Classifier, Open-Set UNKNOWN (model-only), Explainability (Canvas-rendered tokens), 512x512 Letterbox, Ultra-Low False-Positive Operating Point, Localhost Web UI + Future Discord Bot Compatibility (No Duplicates), Bootstrap/CV Threshold Tuning
+
+ROLE: You are a senior ML engineer. Implement a complete Python project that trains and runs an AI-image detector. It MUST use only pixel content. DO NOT use EXIF, filenames, URLs, watermarks, web source, or any non-image metadata “hacks.” The detector must work on photos and illustrations, and be robust to crops, resizing, JPEG/reupload/screenshot artifacts, and post-processing (filters, sharpening, grain). Inference must be practical on CPU; training should support GPU if available.
+
+USER-CONFIRMED CONSTRAINTS / INTENT:
+- Preprocess ALL inputs to exactly 512x512 via LETTERBOX padding:
+  - If larger: downscale preserving aspect so max side <=512, then pad to 512x512.
+  - If smaller: upscale preserving aspect so max side ==512, then pad to 512x512.
+  - Padding MUST NOT become a class cue: use reflection padding or border-statistics padding; randomize and apply symmetrically across classes.
+  - Interpolation randomness MUST be used as augmentation for symmetry.
+- Labels available: AI vs NON_AI only (no attribution).
+- Synthetic tracing transforms only:
+  - AI-looking linework / traced-from-AI style should be treated as AI (AI-traced counts as AI).
+- Other heavy edits should tend toward UNKNOWN rather than forcing AI/NON_AI.
+- False AI accusations are costly: prioritize ULTRA-LOW FALSE POSITIVES.
+  - Target FPR: 0.1% default, support 0.01% configuration.
+  - UNKNOWN rate in normal traffic: 1–2% acceptable if it reduces false AI accusations.
+- Inference MUST be done via a WEB UI (NO CLI for checking AI).
+  - No batch upload; single-image workflow only.
+  - Web UI is localhost-only for feedback labeling.
+  - Training/eval scripts can be run from command line.
+- Feedback:
+  - UI feedback buttons ONLY: “AI” and “NOT AI”. No user-labeled UNKNOWN.
+  - Every label goes straight into the training set (localhost-only phase).
+  - Store ONLY the normalized 512x512 version for caching/training (do NOT store originals).
+  - If relabeled, use the LATEST label only.
+  - Enforce NO DUPLICATES in cache and training (one canonical record per image hash).
+- Caching policy:
+  - Localhost UI: keep results forever by default (unbounded).
+  - Future Discord bot backend: configurable bounded cache (max_items / ttl_days).
+- Threshold tuning methodology:
+  - Use cross-validation out-of-fold predictions + bootstrapping to estimate FPR uncertainty (especially for 0.01%) without sacrificing training data.
+- Explainability rendering:
+  - Backend returns raw token+importance JSON (no pre-rendered heatmap).
+  - Frontend renders the overlay in an HTML canvas.
+  - UI must show hotspots and “why” they were chosen (feature contributions per token).
+
+DATASET SIZE:
+- 44,521 AI
+- 51,757 NON_AI
+
+PRIMARY OUTPUTS (WEB UI MUST DISPLAY):
+1) Calibrated probability P(AI)
+2) Decision in {AI, NON_AI, UNKNOWN}  (UNKNOWN is model-decided only)
+3) Confidence score and OOD/open-set score
+4) Explainability (interactive):
+   - overlay heatmap rendered from tokens on browser canvas
+   - token markers (points of interest) and reasons/features
+
+TOKEN REPRESENTATION (KEY): Tokens must “move to where features are.” No fixed-grid patch tokens as the primary representation.
+Token fields (minimum):
+- discrete_id (int)
+- x, y (normalized [0,1] in 512x512)
+- scale (float)
+- proposal_confidence (float)   # from keypoint/saliency/slot selection
+- importance (float)            # from model explanation
+Additional per-token explanation fields (REQUIRED for “why”):
+- proposal_type: one of {"keypoint","saliency","slot"}
+- proposal_score_raw: float
+- saliency_components: dict of {component_name: value} for saliency-proposed tokens (grad_energy, entropy, laplacian, fft_energy)
+- neighborhood_stats: dict (e.g., mean neighbor similarity, degree)
+- model_contrib: dict with at least:
+  - attn_score (if available)
+  - grad_score (if available)
+  - final_importance = weighted combination (document formula)
+
+MODEL PIPELINE (IMPLEMENT):
+A) Token proposal (hybrid, content-adaptive):
+   1) Keypoints: FAST/Harris/DoG-like detector -> (x,y,scale,response)
+   2) Saliency top-K:
+      - pixel-only saliency maps:
+        * gradient magnitude energy
+        * local entropy
+        * Laplacian/LoG response
+        * optional local FFT energy
+      - select top candidates via NMS
+   3) Slot Attention:
+      - light CNN stem -> feature map
+      - slot attention -> K_slot slots + attention maps
+      - derive (x,y,scale,score) from attention moments
+   Fusion:
+   - normalize proposals; de-duplicate via NMS in (x,y,scale)
+   - adaptive K: threshold + coverage constraints; cap N_max
+   - ensure minimum coverage N_min with fallback sampling if needed
+
+B) Descriptor encoding (trained small CNN):
+   - patch extraction around (x,y,scale), resize 64x64
+   - descriptor CNN -> D-dim embedding (default D=128)
+
+C) Discretization (K-means + VQGAN-like combined):
+   - inference uses offline K-means (default K=2048) on descriptor embeddings -> nearest centroid ID
+   - VQGAN-like pretraining (Approach 1 default):
+     1) patch -> encoder -> embedding -> VQ -> decoder -> reconstructed patch
+     2) losses: L1 + perceptual (VGG/LPIPS) + commitment; optional GAN only if stable
+     3) freeze encoder trunk; fit K-means on embeddings
+
+D) Transformer enrichment:
+   - embedding(id) + enc(x,y) + enc(scale) + enc(proposal_confidence)
+   - small Set Transformer preferred
+
+E) Graph classifier:
+   - kNN graph (k=8 default) + GNN (GAT/GraphSAGE)
+   - outputs AI logit + OOD score head
+
+F) Multi-crop voting:
+   - robust T=7, fast T=3
+   - aggregate P(AI) with trimmed mean
+   - instability across crops + OOD -> UNKNOWN
+   - tau_ai tuned to meet target FPR; false positives minimized
+
+TRACED CONTENT (SYNTHETIC):
+- apply tracing transforms to AI images, label AI:
+  - Canny + thinning/skeletonization
+  - XDoG lineart
+  - posterize + contour overlay
+- include in training so AI-like linework -> AI
+
+HEAVY EDITS -> UNKNOWN (OUTLIER EXPOSURE):
+- build unknown proxies via heavy edit pipelines applied to both classes
+- train OOD head to flag these as OOD/UNKNOWN; do NOT force main head to AI
+- UNKNOWN is model-only; UI does not collect UNKNOWN labels.
+
+CALIBRATION:
+- temperature scaling (default)
+- calibration learned on out-of-fold predictions to avoid leakage
+
+THRESHOLD TUNING (OUT-OF-FOLD + BOOTSTRAP, ULTRA-LOW FPR):
+Implement train/tune_thresholds.py:
+- K-fold out-of-fold predictions for all training items (respect hash-group splits).
+- Bootstrap NON_AI out-of-fold scores to estimate FPR CI at candidate thresholds.
+- Choose tau_ai such that upper CI <= target_fpr (0.1%/0.01%) at confidence 95% (configurable).
+- Tune UNKNOWN thresholds to allow ~1–2% UNKNOWN on normal validation if it reduces false positives.
+
+DATA SPLITS + LEAKAGE PREVENTION:
+- final untouched TEST set (10%) never used in CV tuning.
+- perceptual-hash grouping split to prevent near-duplicate leakage across folds and test.
+
+AUGMENTATIONS (SYMMETRIC):
+- crop/resize jitter, interpolation randomness
+- JPEG recompression, downscale->upscale
+- blur/sharpen, noise/grain
+- mild color jitter, gamma
+- padding randomness
+
+PROJECT STRUCTURE (NO CLI INFERENCE):
+- data/
+  - datasets.py
+  - transforms.py
+  - splits.py
+  - unknown_proxies.py
+  - traced_augs.py
+- tokenization/
+  - preprocess_512.py
+  - keypoints.py
+  - saliency.py
+  - slot_attention.py
+  - patches.py
+  - descriptor_cnn.py
+  - kmeans_codebook.py
+  - vqgan_tokenizer.py
+  - token_fusion.py
+- models/
+  - token_transformer.py
+  - graph_gnn.py
+  - open_set.py
+  - calibrate.py
+  - explain.py (token-level importance + “reasons” aggregation)
+- train/ (command line OK):
+  - train_descriptor_vq.py
+  - build_kmeans.py
+  - train_classifier.py
+  - evaluate.py
+  - tune_thresholds.py
+- webui/ (PRIMARY INFERENCE INTERFACE):
+  - backend/
+      - app.py (FastAPI, binds 127.0.0.1)
+      - inference.py (returns JSON + token reasons)
+      - cache.py (SQLite + normalized PNG bytes; de-duplicated)
+      - feedback.py (AI/NOT AI only; latest label semantics)
+      - exports.py (export de-duplicated feedback dataset)
+      - models_store.py (versioned models + thresholds)
+      - schemas.py (pydantic)
+  - frontend/
+      - index.html + JS (or React/Vite)
+      - canvas renderer for overlay heatmap
+      - token inspector panel (“why” per token)
+      - drag/drop + paste
+      - history browser
+      - feedback buttons AI / NOT AI
+- configs/default.yaml
+- requirements.txt
+
+WEB UI REQUIREMENTS (CANVAS EXPLAINABILITY):
+1) Single-image input:
+   - drag/drop file
+   - paste from clipboard
+2) Results display:
+   - numeric: P(AI), decision, confidence, OOD score, tau_ai, model version
+3) Canvas overlay renderer:
+   - base layer: 512x512 image
+   - overlay layer: draw “hotspots” using tokens:
+     - Each token draws a Gaussian/soft circle centered at (x,y) with radius proportional to scale.
+     - Intensity proportional to token.importance (normalized).
+   - Controls:
+     - overlay opacity slider
+     - toggle markers
+     - threshold slider to show only tokens above importance cutoff
+4) Points-of-interest list:
+   - show top-N tokens by importance
+   - clicking focuses/highlights token on canvas
+   - show “WHY” details:
+     - proposal_type and proposal_score_raw
+     - saliency_components (if any)
+     - neighborhood_stats
+     - model_contrib (attn_score, grad_score, etc.)
+     - short auto-generated explanation string for the token, produced by backend using those fields (no LLM required).
+5) Caching/history:
+   - compute hash from normalized bytes; one record per hash
+   - keep forever in localhost mode
+   - re-run inference only if model version changed or user hits “recompute”
+6) Feedback (NO UNKNOWN):
+   - buttons: AI / NOT AI
+   - latest label wins; training export uses latest label only
+   - enforce no duplicate images in export (by hash)
+
+FUTURE DISCORD BOT COMPATIBILITY:
+- Keep inference endpoints stable.
+- Provide bounded cache mode via config (max_items/ttl_days) for bot deployment.
+- Feedback storage implemented via interface to allow future queue/review.
+
+CONFIG:
+- webui:
+  - bind_host=127.0.0.1
+  - port
+  - cache_policy: {mode: "unbounded"|"bounded", max_items, ttl_days}
+  - max_upload_size
+- thresholds:
+  - target_fpr (0.1% default, allow 0.01%)
+  - fpr_ci_confidence (0.95 default)
+  - tau_ai, tau_ood, tau_unknown
+- inference modes:
+  - fast vs robust (T, N_max)
+- explainability:
+  - importance_cutoff_default
+  - overlay_sigma_scale
+
+NO CLI FOR INFERENCE:
+- Do NOT provide any command-line “predict” tool for checking AI.
+- Inference must be done in the web UI.
+- Training/eval scripts from command line are allowed.
+
+DEFAULTS:
+- unbounded cache for localhost UI
+- bounded cache supported via config for future bot
+- D=128, K=2048, N_min=128, N_max=512, robust T=7, fast T=3
+- target_fpr default 0.1%, support 0.01%
+- tau_ai chosen conservatively: upper CI <= target_fpr
+
+END.
