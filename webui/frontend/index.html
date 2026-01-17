@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Image Detector</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f6f6f6; }
+    header { background: #222; color: #fff; padding: 12px 20px; }
+    main { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; padding: 16px; }
+    .panel { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .dropzone { border: 2px dashed #999; padding: 20px; text-align: center; border-radius: 8px; }
+    canvas { border: 1px solid #ccc; border-radius: 6px; }
+    .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .metric { background: #f2f2f2; border-radius: 6px; padding: 8px; }
+    .controls { display: grid; gap: 8px; }
+    .token-list { max-height: 280px; overflow-y: auto; }
+    .token-item { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+    .token-item:hover { background: #fafafa; }
+    .history-item { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #eee; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; }
+    .btn-ai { background: #b3001b; color: #fff; }
+    .btn-not { background: #2b7a0b; color: #fff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Pixel-only AI Image Detector</h2>
+  </header>
+  <main>
+    <section class="panel">
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept="image/*" />
+        <p>Drag & drop or paste an image here.</p>
+      </div>
+      <canvas id="canvas" width="512" height="512"></canvas>
+      <div class="controls">
+        <label>Overlay opacity <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.6" /></label>
+        <label>Importance cutoff <input type="range" id="cutoff" min="0" max="1" step="0.05" value="0.15" /></label>
+        <label><input type="checkbox" id="toggleMarkers" checked /> Show markers</label>
+      </div>
+    </section>
+    <aside class="panel">
+      <div class="metrics">
+        <div class="metric">P(AI): <span id="probAi">-</span></div>
+        <div class="metric">Decision: <span id="decision">-</span></div>
+        <div class="metric">Confidence: <span id="confidence">-</span></div>
+        <div class="metric">OOD: <span id="ood">-</span></div>
+        <div class="metric">Tau AI: <span id="tauAi">-</span></div>
+        <div class="metric">Model: <span id="modelVersion">-</span></div>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-ai" id="btnAi">AI</button>
+        <button class="btn-not" id="btnNotAi">NOT AI</button>
+      </div>
+      <h3>Top Tokens</h3>
+      <div class="token-list" id="tokenList"></div>
+      <h3>History</h3>
+      <div id="history"></div>
+    </aside>
+  </main>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const opacity = document.getElementById('opacity');
+    const cutoff = document.getElementById('cutoff');
+    const toggleMarkers = document.getElementById('toggleMarkers');
+    const tokenList = document.getElementById('tokenList');
+    const historyEl = document.getElementById('history');
+    let currentTokens = [];
+    let currentImage = null;
+    let currentHash = null;
+
+    function letterboxImage(img) {
+      const scale = 512 / Math.max(img.width, img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const x = (512 - w) / 2;
+      const y = (512 - h) / 2;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 512, 512);
+      ctx.drawImage(img, x, y, w, h);
+    }
+
+    function drawOverlay() {
+      if (!currentImage) return;
+      letterboxImage(currentImage);
+      const alpha = parseFloat(opacity.value);
+      const threshold = parseFloat(cutoff.value);
+      currentTokens.forEach(token => {
+        if (token.importance < threshold) return;
+        const x = token.x * 512;
+        const y = token.y * 512;
+        const radius = Math.max(6, token.scale * 512);
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        gradient.addColorStop(0, `rgba(255, 0, 0, ${alpha})`);
+        gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        if (toggleMarkers.checked) {
+          ctx.fillStyle = 'rgba(255,255,255,0.8)';
+          ctx.beginPath();
+          ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+
+    function renderTokens(tokens) {
+      tokenList.innerHTML = '';
+      const sorted = [...tokens].sort((a, b) => b.importance - a.importance).slice(0, 20);
+      sorted.forEach(token => {
+        const div = document.createElement('div');
+        div.className = 'token-item';
+        div.textContent = `${token.proposal_type} | imp ${token.importance.toFixed(2)} | ${token.reason}`;
+        div.onclick = () => {
+          cutoff.value = Math.min(1, token.importance.toFixed(2));
+          drawOverlay();
+        };
+        tokenList.appendChild(div);
+      });
+    }
+
+    async function updateHistory() {
+      const res = await fetch('/history');
+      const items = await res.json();
+      historyEl.innerHTML = '';
+      items.slice(0, 10).forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'history-item';
+        div.textContent = `${item.created_at}: ${item.decision} (${item.prob_ai.toFixed(2)})`;
+        historyEl.appendChild(div);
+      });
+    }
+
+    async function sendImage(file) {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/infer', { method: 'POST', body: form });
+      const data = await res.json();
+      document.getElementById('probAi').textContent = data.prob_ai.toFixed(3);
+      document.getElementById('decision').textContent = data.decision;
+      document.getElementById('confidence').textContent = data.confidence.toFixed(3);
+      document.getElementById('ood').textContent = data.ood_score.toFixed(3);
+      document.getElementById('tauAi').textContent = data.tau_ai.toFixed(3);
+      document.getElementById('modelVersion').textContent = data.model_version;
+      currentTokens = data.tokens;
+      currentHash = data.image_hash;
+      renderTokens(currentTokens);
+      drawOverlay();
+      await updateHistory();
+    }
+
+    document.getElementById('fileInput').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      currentImage = new Image();
+      currentImage.onload = () => {
+        drawOverlay();
+        sendImage(file);
+      };
+      currentImage.src = URL.createObjectURL(file);
+    });
+
+    document.getElementById('dropzone').addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+
+    document.getElementById('dropzone').addEventListener('drop', e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      currentImage = new Image();
+      currentImage.onload = () => {
+        drawOverlay();
+        sendImage(file);
+      };
+      currentImage.src = URL.createObjectURL(file);
+    });
+
+    document.addEventListener('paste', e => {
+      const file = Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/'));
+      if (!file) return;
+      currentImage = new Image();
+      currentImage.onload = () => {
+        drawOverlay();
+        sendImage(file);
+      };
+      currentImage.src = URL.createObjectURL(file);
+    });
+
+    opacity.addEventListener('input', drawOverlay);
+    cutoff.addEventListener('input', drawOverlay);
+    toggleMarkers.addEventListener('change', drawOverlay);
+
+    document.getElementById('btnAi').addEventListener('click', async () => {
+      if (!currentHash) return;
+      await fetch('/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_hash: currentHash, label: 'AI' })
+      });
+    });
+
+    document.getElementById('btnNotAi').addEventListener('click', async () => {
+      if (!currentHash) return;
+      await fetch('/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_hash: currentHash, label: 'NOT AI' })
+      });
+    });
+
+    updateHistory();
+  </script>
+</body>
+</html>
